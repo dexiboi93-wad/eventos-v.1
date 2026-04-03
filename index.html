@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mastermind Orchestrator</title>
+    
+    <!-- CRITICAL: Disable problematic browser APIs before any scripts load -->
+    <script>
+      (function() {
+        'use strict';
+        
+        if (typeof window === 'undefined' || window.__SUPABASE_POLYFILLS_APPLIED__) {
+          return;
+        }
+        
+        window.__SUPABASE_POLYFILLS_APPLIED__ = true;
+        
+        // Minimal no-op BroadcastChannel that never throws
+        function SafeBroadcastChannel(name) {
+          this.name = name || '';
+          this.onmessage = null;
+          this.onmessageerror = null;
+        }
+        
+        SafeBroadcastChannel.prototype.postMessage = function() {};
+        SafeBroadcastChannel.prototype.close = function() {};
+        SafeBroadcastChannel.prototype.addEventListener = function() {};
+        SafeBroadcastChannel.prototype.removeEventListener = function() {};
+        SafeBroadcastChannel.prototype.dispatchEvent = function() { return false; };
+        
+        // Safe navigator.locks implementation with Proxy to catch SecurityErrors
+        var originalLocks = navigator && navigator.locks;
+        var noOpLocks = {
+          request: function(name, optionsOrCallback, callback) {
+            var cb = typeof optionsOrCallback === 'function' ? optionsOrCallback : callback;
+            if (cb) {
+              return Promise.resolve().then(function() {
+                return cb({ name: name, mode: 'exclusive' });
+              });
+            }
+            return Promise.resolve();
+          },
+          query: function() {
+            return Promise.resolve({ held: [], pending: [] });
+          }
+        };
+        
+        // Create Proxy that intercepts SecurityErrors
+        var safeLocks = new Proxy(noOpLocks, {
+          get: function(target, prop) {
+            if (prop === 'request') {
+              return function(name, options, callback) {
+                // Always use our no-op version to avoid any SecurityErrors
+                return target.request(name, options, callback);
+              };
+            }
+            if (prop === 'query') {
+              return function() {
+                return target.query();
+              };
+            }
+            return target[prop];
+          }
+        });
+        
+        // Try to set BroadcastChannel
+        try {
+          if (!window.BroadcastChannel || window.BroadcastChannel.toString().indexOf('[native code]') !== -1) {
+            window.BroadcastChannel = SafeBroadcastChannel;
+          }
+        } catch (e) {
+          // Silently ignore
+        }
+        
+        // Try to override navigator.locks with Proxy wrapper
+        if (navigator) {
+          try {
+            Object.defineProperty(navigator, 'locks', {
+              value: safeLocks,
+              writable: false,
+              configurable: true,
+              enumerable: true
+            });
+            console.log('[Polyfill] navigator.locks wrapped with Proxy');
+          } catch (e) {
+            try {
+              Object.defineProperty(navigator, 'locks', {
+                get: function() { return safeLocks; },
+                set: function() {},
+                configurable: true,
+                enumerable: true
+              });
+              console.log('[Polyfill] navigator.locks wrapped with getter');
+            } catch (e2) {
+              // Read-only - that's okay, Supabase config should handle it
+              console.log('[Polyfill] navigator.locks is read-only');
+            }
+          }
+        }
+        
+        console.log('[Polyfill] Safe browser API wrappers loaded');
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/app/App.tsx"></script>
+  </body>
+</html>
